@@ -71,10 +71,11 @@
         }
 
     </style>
+    <link rel="icon" href="flame-3d.ico" type="image/x-icon">
 </head>
 <body>
 
-    <div id="info">Tiny Torch - Floating Sparks</div>
+    <div id="info">Tiny Torch • Floating Sparks • Drag to Draw Fire</div>
     
     <div id="terminal"></div>
 
@@ -94,6 +95,9 @@
         let mouse = { x: 0, y: 0 };
         let targetMouse = { x: 0, y: 0 };
         let rowElements = [];
+        
+        // Interaction State
+        let isDragging = false;
         
         // Spark System State
         let sparks = [];
@@ -130,19 +134,69 @@
             window.resizeTimer = setTimeout(initGrid, 200);
         });
 
+        // ---------------------------------------------------------
+        // INTERACTION HANDLERS
+        // ---------------------------------------------------------
+
+        // Helper to convert screen pixels to simulation coordinates
+        function getSimCoords(clientX, clientY) {
+            // Approx grid coordinates
+            let gx = clientX / (config.fontSize * 0.6);
+            let gy = clientY / (config.fontSize * 1.0);
+            
+            // Normalize to center (matches getFlameDist logic)
+            // Center is 0,0. Scale is based on rows.
+            let nx = (gx - config.cols / 2) / (config.rows * 0.5);
+            let ny = (gy - config.rows / 2) / (config.rows * 0.5);
+            
+            return { x: nx, y: ny };
+        }
+
+        function spawnDragParticles(clientX, clientY) {
+             const sim = getSimCoords(clientX, clientY);
+             
+             // Spawn a cluster for a "thick" feel
+             for(let i=0; i<3; i++) {
+                sparks.push({
+                    x: sim.x + (Math.random() - 0.5) * 0.05,
+                    y: sim.y + (Math.random() - 0.5) * 0.05,
+                    vx: (Math.random() - 0.5) * 0.01,
+                    vy: -0.01 - (Math.random() * 0.02), // Upward momentum
+                    life: 1.0 + Math.random() * 0.5,
+                    type: 'drag' // Special type for drawn fire
+                });
+             }
+        }
+
+        window.addEventListener('mousedown', () => isDragging = true);
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('touchstart', () => isDragging = true);
+        window.addEventListener('touchend', () => isDragging = false);
+
         window.addEventListener('mousemove', e => {
+            // Update physics target
             targetMouse.x = (e.clientX - window.innerWidth/2) / window.innerWidth;
             targetMouse.y = (e.clientY - window.innerHeight/2) / window.innerHeight;
+            
             terminal.style.setProperty('--mx', `${e.clientX}px`);
             terminal.style.setProperty('--my', `${e.clientY}px`);
+
+            if (isDragging) {
+                spawnDragParticles(e.clientX, e.clientY);
+            }
         });
         
         window.addEventListener('touchmove', e => {
             const touch = e.touches[0];
             targetMouse.x = (touch.clientX - window.innerWidth/2) / window.innerWidth;
             targetMouse.y = (touch.clientY - window.innerHeight/2) / window.innerHeight;
+            
             terminal.style.setProperty('--mx', `${touch.clientX}px`);
             terminal.style.setProperty('--my', `${touch.clientY}px`);
+
+            if (isDragging) {
+                spawnDragParticles(touch.clientX, touch.clientY);
+            }
         });
 
         initGrid();
@@ -199,7 +253,7 @@
         // ---------------------------------------------------------
 
         function updateSparks() {
-            // 1. Spawn Small sparks (Frequent)
+            // 1. Spawn Small sparks (Frequent) - Background ambiance
             if (Math.random() < 0.15) { 
                 sparks.push({
                     x: (Math.random() - 0.5) * 0.15 + (mouse.x * 0.4), 
@@ -212,14 +266,13 @@
             }
 
             // 2. Spawn BIG Sparks (Rare)
-            if (Math.random() < 0.02) { // 2% chance per frame
+            if (Math.random() < 0.02) { 
                 sparks.push({
-                    // Spawn closer to center of flame
                     x: (Math.random() - 0.5) * 0.05 + (mouse.x * 0.4), 
                     y: -0.1, 
-                    vx: (Math.random() - 0.5) * 0.005, // Moves slower horizontally
-                    vy: -0.005 - (Math.random() * 0.01), // Moves slower vertically
-                    life: 2.0, // Lives twice as long
+                    vx: (Math.random() - 0.5) * 0.005, 
+                    vy: -0.005 - (Math.random() * 0.01), 
+                    life: 2.0, 
                     type: 'big'
                 });
             }
@@ -230,15 +283,20 @@
                 s.x += s.vx;
                 s.y += s.vy;
                 
-                // Big sparks fade slower
-                let fadeRate = s.type === 'big' ? 0.008 : 0.015;
+                // Fade Rates
+                let fadeRate = 0.015;
+                if (s.type === 'big') fadeRate = 0.008;
+                if (s.type === 'drag') fadeRate = 0.025; // User fire fades reasonably fast
+                
                 s.life -= fadeRate;
 
-                // Wind effect
-                s.x -= (mouse.x * 0.005); 
-
-                // Wobble
-                s.x += Math.sin(time * 10 + i) * 0.002;
+                // Wind effect on natural sparks
+                if (s.type !== 'drag') {
+                    s.x -= (mouse.x * 0.005); 
+                } else {
+                    // Slight turbulence for user fire
+                    s.x += Math.sin(time * 20 + i) * 0.003;
+                }
 
                 if (s.life <= 0) {
                     sparks.splice(i, 1);
@@ -267,18 +325,25 @@
                 if (gx >= 0 && gx < config.cols && gy >= 0 && gy < config.rows) {
                     let char = '.';
                     
-                    if (s.type === 'big') {
-                        // Big spark animation: starts heavy (W), fades to lighter chars
-                        if (s.life > 1.4) char = 'W';
-                        else if (s.life > 1.0) char = '%';
-                        else if (s.life > 0.6) char = '*';
+                    if (s.type === 'big' || s.type === 'drag') {
+                        // Heavy fire logic
+                        if (s.life > 1.4) char = 'M'; // Very bright/thick
+                        else if (s.life > 1.0) char = 'W';
+                        else if (s.life > 0.7) char = '%';
+                        else if (s.life > 0.4) char = '*';
                         else char = '·';
                     } else {
                         // Small spark
                         char = s.life > 0.5 ? "*" : "·";
                     }
                     
-                    sparkSet.set(`${gx},${gy}`, char);
+                    // Logic to handle overlaps: favor heavier char
+                    // If a char already exists at this spot, only overwrite if new one is 'heavier'
+                    // Simple heuristic: if we have a char, maybe ignore? 
+                    // Or prioritize 'drag' over 'small'.
+                    if (!sparkSet.has(`${gx},${gy}`) || s.type === 'drag') {
+                         sparkSet.set(`${gx},${gy}`, char);
+                    }
                 }
             });
 
@@ -289,7 +354,7 @@
 
                 for (let x = 0; x < config.cols; x++) {
                     
-                    // Render Sparks over flame
+                    // Render Sparks/Drag Fire
                     if (sparkSet.has(`${x},${y}`)) {
                         lineBuffer += sparkSet.get(`${x},${y}`);
                         continue; 
